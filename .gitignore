@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+
+# VS Code
+.vscode/
+
+# Data & Results
+*.xlsx
+*.h5
+*.sqlite
+*.db
+*.log
+*.out
+*.pkl
+*.npy
+*.npz
+*.parquet
+*.feather
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+
+# Environment
+.env
+.venv/
+venv/
+ENV/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Others
+*.bak
+*.swp
+*.swo
+
+# Ignore model outputs
+ml_signals_output.csv
+equity_curve.csv
+trades.csv
+data/*_with_signals.csv
+signal_vs_future_return.png
+feature_importances.png

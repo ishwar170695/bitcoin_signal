@@ -28,7 +28,29 @@ def add_indicators(df):
 def label_signals(df, future_window=6, buy_thresh=0.01, sell_thresh=-0.01):
     df = df.copy()
     df['future_return'] = df['close'].shift(-future_window) / df['close'] - 1
+    # Regime-based adaptive thresholds
+    if 'ema100' not in df.columns:
+        raise ValueError('ema100 must be present in DataFrame for regime-based labeling.')
     df['signal'] = 0
-    df.loc[df['future_return'] >= buy_thresh, 'signal'] = 1
-    df.loc[df['future_return'] <= sell_thresh, 'signal'] = -1
+    for idx, row in df.iterrows():
+        price = row['close']
+        ema100 = row['ema100']
+        fut_ret = row['future_return']
+        # Bull regime
+        if price > ema100:
+            bthresh = buy_thresh * 0.7  # more aggressive buy
+            sthresh = sell_thresh * 1.5  # less aggressive sell
+        # Bear regime
+        elif price < ema100:
+            bthresh = buy_thresh * 1.5  # less aggressive buy
+            sthresh = sell_thresh * 0.7  # more aggressive sell
+        else:
+            bthresh = buy_thresh
+            sthresh = sell_thresh
+        if fut_ret >= bthresh:
+            df.at[idx, 'signal'] = 1
+        elif fut_ret <= sthresh:
+            df.at[idx, 'signal'] = -1
+        else:
+            df.at[idx, 'signal'] = 0
     return df.drop(columns=['future_return'])

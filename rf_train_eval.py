@@ -17,9 +17,12 @@ label_map = {-1: 0, 0: 1, 1: 2}
 inv_label_map = {0: -1, 1: 0, 2: 1}
 
 def walk_forward_xgb(df, confidence_threshold=0.6, shuffle_labels=False):
+    df = df.copy()
     df = df.dropna(subset=FEATURES + ['signal', 'ema100'])
+    df['regime'] = (df['close'] > df['ema100']).astype(int)  # 1 = bull, 0 = bear
     X = df[FEATURES].values
     y = df['signal'].map(label_map).values
+    regimes = df['regime'].values
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
@@ -33,6 +36,8 @@ def walk_forward_xgb(df, confidence_threshold=0.6, shuffle_labels=False):
         end = start + window_size
         X_train, y_train = X_scaled[start:end], y[start:end]
         X_test, y_test = X_scaled[end:end+step_size], y[end:end+step_size]
+        regime_train = regimes[start:end]
+        regime_test = regimes[end:end+step_size]
         test_indices = df.index[end:end+step_size]
 
         if len(set(y_train)) < 2:
@@ -43,26 +48,28 @@ def walk_forward_xgb(df, confidence_threshold=0.6, shuffle_labels=False):
             import random
             random.shuffle(y_train)
 
-        clf = XGBClassifier(n_estimators=100, max_depth=5, use_label_encoder=False,
-                            eval_metric='mlogloss', random_state=42)
-        clf.fit(X_train, y_train)
-        y_proba = clf.predict_proba(X_test)
+        clf_bull = XGBClassifier(n_estimators=100, max_depth=5, use_label_encoder=False,
+                                 eval_metric='mlogloss', random_state=42)
+        clf_bear = XGBClassifier(n_estimators=100, max_depth=5, use_label_encoder=False,
+                                 eval_metric='mlogloss', random_state=42)
+
+        # Train separate models
+        clf_bull.fit(X_train[regime_train == 1], y_train[regime_train == 1])
+        clf_bear.fit(X_train[regime_train == 0], y_train[regime_train == 0])
 
         y_pred = []
-        for idx, proba in enumerate(y_proba):
+        for i, idx in enumerate(test_indices):
+            x_row = X_test[i].reshape(1, -1)
+            regime = regime_test[i]
+
+            clf = clf_bull if regime == 1 else clf_bear
+            proba = clf.predict_proba(x_row)[0]
             max_p = max(proba)
             pred_class = proba.argmax()
 
-            if max_p < confidence_threshold:
+            # Confidence filter
+            if confidence_threshold is not None and max_p < confidence_threshold:
                 pred_class = 1  # hold
-
-            real_idx = test_indices[idx]
-            price = df.loc[real_idx, 'close']
-            ema100 = df.loc[real_idx, 'ema100']
-            if pred_class == 0 and price > ema100:
-                pred_class = 1
-            elif pred_class == 2 and price < ema100:
-                pred_class = 1
 
             y_pred.append(pred_class)
 
@@ -73,11 +80,13 @@ def walk_forward_xgb(df, confidence_threshold=0.6, shuffle_labels=False):
         acc = accuracy_score(y_test, y_pred)
         print(f"Window {start}-{end}: Accuracy={acc:.4f}")
 
+        # Add importance only from bull model (or combine both if you prefer)
         if feature_importances is None:
-            feature_importances = clf.feature_importances_
+            feature_importances = clf_bull.feature_importances_
         else:
-            feature_importances += clf.feature_importances_
+            feature_importances += clf_bull.feature_importances_
 
+    # Save predictions
     pred_signals = [inv_label_map[p] for p in all_y_pred]
     df['ml_signal'] = 0
     df.loc[all_test_indices, 'ml_signal'] = pred_signals
@@ -93,7 +102,7 @@ def walk_forward_xgb(df, confidence_threshold=0.6, shuffle_labels=False):
         plt.figure(figsize=(10, 6))
         sorted_idx = feature_importances.argsort()[::-1]
         plt.bar([FEATURES[i] for i in sorted_idx], feature_importances[sorted_idx])
-        plt.title('XGBoost Feature Importances (Walk-forward Avg)')
+        plt.title('XGBoost Feature Importances (Bull Model Avg)')
         plt.ylabel('Importance')
         plt.xticks(rotation=45)
         plt.tight_layout()
@@ -115,13 +124,13 @@ def plot_signal_vs_future(df):
         plt.savefig("signal_vs_future_return.png")
         plt.show()
 
-def run_all(shuffle=False):
+def run_all(shuffle=False, confidence_threshold=0.6):
     df = pd.read_csv('data/btc_17-18_30m.csv', parse_dates=['datetime'])
     df = add_indicators(df)
     df = label_signals(df, future_window=6, buy_thresh=0.01, sell_thresh=-0.01)
 
     print("\n--- Walk-forward XGBoost ---")
-    df = walk_forward_xgb(df, confidence_threshold=0.6, shuffle_labels=shuffle)
+    df = walk_forward_xgb(df, confidence_threshold=confidence_threshold, shuffle_labels=shuffle)
 
     print("\n--- Realistic Backtest (ML signals) ---")
     df_bt = df.copy()
@@ -140,4 +149,5 @@ def run_all(shuffle=False):
     plot_signal_vs_future(df)
 
 if __name__ == "__main__":
-    run_all(shuffle=False)  # Set to True to run the shuffle control test
+    # You can change threshold or set it to None to disable
+    run_all(shuffle=False, confidence_threshold=0.6)
